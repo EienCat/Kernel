@@ -19,4 +19,4 @@ sysctl net.ipv4.tcp_congestion_control
 sysctl net.ipv4.tcp_available_congestion_control
 ```
 
-如果想启用 bbrv3，流控算法应设置为 `bbr`，如果想使用早期版本的 bbr，流控算法应设置为 `bbr1`。
+如果想启用 bbrv3，流控算法应设置为 `bbr`，如果想使用早期版本的 bbr，流控算法应设置为 `bbr1`
