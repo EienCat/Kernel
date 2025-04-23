@@ -1,0 +1,107 @@
+name: Build Kernel With BBRv3
+
+on:
+  schedule:
+    - cron: 0 16 * * *
+  workflow_dispatch:
+
+env:
+  GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete Old Releases
+        uses: dev-drprasad/delete-older-releases@master
+        with:
+          keep_latest: 0
+          delete_tags: true
+
+      - name: Delete Old Workflows
+        uses: Mattraks/delete-workflow-runs@main
+        with:
+          retain_days: 0
+          keep_minimum_runs: 2
+
+  build:
+    needs: cleanup
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runs_on: ubuntu-latest
+          - arch: arm64
+            runs_on: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runs_on }}
+    env:
+      ARCH: ${{ matrix.arch }}
+      KERNEL_VERSION: ""
+    steps:
+      - name: Get Kernel Version
+        id: get_kernel_version
+        run: |
+          version=$(curl -s https://www.kernel.org | grep -A 1 -m 1 "stable:" | grep -oP '\d+\.\d+\.\d+')
+          echo "KERNEL_VERSION=$version" >> $GITHUB_ENV
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git build-essential libncurses-dev libssl-dev libelf-dev bison bc flex rsync debhelper
+
+      - name: Create Directory
+        run: mkdir ./kernel/
+
+      - name: Download Kernel source code
+        working-directory: ./kernel/
+        run: |
+          kernel_branch=$(echo "${{ env.KERNEL_VERSION }}" | grep -oP '^\d+\.\d+')
+          git clone --branch linux-$kernel_branch.y https://github.com/gregkh/linux.git
+
+      - name: Add Google BBRv3
+        working-directory: ./kernel/linux/
+        run: |
+          git remote add google-bbr https://github.com/google/bbr.git
+          git fetch google-bbr
+          git checkout google-bbr/v3
+
+      - name: Set kernel version variables
+        working-directory: ./kernel/linux/
+        run: |
+          IFS='.' read -r version patchlevel sublevel <<< "${{ env.KERNEL_VERSION }}"
+          sed -i "s/^VERSION = .*/VERSION = $version/" Makefile
+          sed -i "s/^PATCHLEVEL = .*/PATCHLEVEL = $patchlevel/" Makefile
+          sed -i "s/^SUBLEVEL = .*/SUBLEVEL = $sublevel/" Makefile
+
+      - name: Setting .config
+        working-directory: ./kernel/linux/
+        run: |
+          curl -sSL https://raw.githubusercontent.com/Naochen2799/Latest-Kernel-BBR3/main/.config > .config
+          make olddefconfig
+
+      - name: Build Kernel
+        working-directory: ./kernel/linux/
+        run: |
+          make bindeb-pkg -j$(nproc)
+
+      - name: Upload config
+        uses: actions/upload-artifact@v4
+        with:
+          name: config-${{ matrix.arch }}
+          path: ./kernel/linux/.config
+
+      - name: Upload deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-${{ matrix.arch }}
+          path: ./kernel/linux-*.deb
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.ARCH }}-${{ env.KERNEL_VERSION }}
+          files: ./kernel/linux-*.deb
+          body: "Latest kernel with BBRv3 for ${{ matrix.arch }} architecture"
